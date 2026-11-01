@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: securesearch
+      POSTGRES_USER: securesearch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-deploy}
+    volumes:
+      - securesearch-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U securesearch -d securesearch"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/securesearch
+      DATABASE_USERNAME: securesearch
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-deploy}
+      DATABASE_DRIVER: org.postgresql.Driver
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  securesearch-db:
