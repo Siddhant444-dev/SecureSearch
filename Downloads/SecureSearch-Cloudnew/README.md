@@ -15,7 +15,7 @@ This repository/project has **no dependency on the BankingApplication**. It has 
 - Browser-side filename and PDF decryption on retrieval.
 - Spring Boot REST API and JPA persistence.
 - H2 local development database and PostgreSQL 16 Docker Compose deployment option.
-- Responsive browser dashboard and a synthetic in-memory benchmarking endpoint for 1k, 10k, and 50k document scales.
+- Responsive browser dashboard with experimental benchmarks from 1, 5, and 10 uploaded PDFs and a synthetic in-memory endpoint for 100, 1k, and 10k document scales.
 - Maven Wrapper and integration tests.
 
 ## Stack
@@ -84,7 +84,7 @@ PDF text extraction runs entirely in the browser using the bundled PDF.js parser
 | `POST` | `/api/secure-search/search` | Find document IDs using blind tokens (AND matching) |
 | `GET` | `/api/secure-search/documents/{id}` | Retrieve encrypted content for client-side decryption |
 | `DELETE` | `/api/secure-search/documents/{id}` | Delete a document and its token index entries |
-| `POST` | `/api/benchmarks/run` | Run the synthetic benchmark at three dataset scales |
+| `POST` | `/api/benchmarks/run` | Run the synthetic benchmark at 100, 1,000, and 10,000 documents |
 
 Illustrative encrypted upload payload:
 
@@ -108,7 +108,7 @@ Search accepts only precomputed tokens; there is no plaintext query field:
 
 ## Benchmark design and interpretation
 
-The benchmark builds synthetic plaintext and HMAC-keyed `HashMap` indexes at 1,000, 10,000, and 50,000 synthetic documents. It prepares tokens before timing so each strategy measures the equivalent lookup operation. Storage output is a rough key/value byte estimate, not actual database size.
+The benchmark compares plaintext and HMAC-keyed lookups at two scopes. Synthetic server-side indexes contain 100, 1,000, and 10,000 generated documents. Experimental browser-side indexes use terms extracted from the first 1, 5, and 10 uploaded PDFs (when available); PDFs are decrypted and parsed locally, and plaintext terms are not sent to the server. Experimental rows require an unlocked workspace. Storage output is a rough key/value byte estimate, not actual database size.
 
 It is **not** a production claim. The benchmark excludes database/network I/O, concurrency, client-side PDF parsing, complete browser timing, index construction, and application deployment overhead. Run repeated trials in a controlled environment and report the scope and leakage assumptions with any results.
 

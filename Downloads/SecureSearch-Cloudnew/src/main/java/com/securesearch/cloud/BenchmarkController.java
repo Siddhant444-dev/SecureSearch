@@ -27,7 +27,7 @@ public class BenchmarkController {
     @PostMapping("/run")
     public BenchmarkReport run() {
         List<ScaleResult> results = new ArrayList<>();
-        for (int documentCount : new int[]{1_000, 10_000, 50_000}) results.add(runScale(documentCount));
+        for (int documentCount : new int[]{100, 1_000, 10_000}) results.add(runScale(documentCount));
         return new BenchmarkReport("Synthetic in-memory exact-key lookup",
                 "Precomputed lookup only; excludes network, database I/O, client PDF parsing, encryption, and browser costs. Storage figures are rough key/value byte estimates, not database measurements.",
                 SEARCHES, results);

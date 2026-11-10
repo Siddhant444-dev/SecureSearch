@@ -289,20 +289,129 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/vendor/pdfjs/pdf.worker.min.mj
     try { await refresh(); } catch (error) { $('results-description').textContent = error.message; }
   });
 
+  async function runExperimentalBenchmarks(documents) {
+    const indexedDocuments = [];
+    for (const doc of documents.slice(0, 10)) {
+      const payload = await api(`${API}/documents/${encodeURIComponent(doc.id)}`);
+      const pdfBytes = await decryptBytes(payload.encryptedContent, payload.contentIv, aesKey);
+      let extracted;
+      try {
+        const file = new File([pdfBytes], 'experimental.pdf', { type: payload.mediaType || 'application/pdf' });
+        extracted = await extractPdfTerms(file, () => {});
+        const tokens = await tokensFor(extracted.terms);
+        indexedDocuments.push({ id: doc.id, terms: extracted.terms, tokens });
+      } finally {
+        pdfBytes.fill(0);
+        extracted?.fileBytes.fill(0);
+      }
+    }
+
+    const scales = [];
+    for (const documentCount of [1, 5, 10]) {
+      if (documents.length < documentCount) continue;
+      const plaintext = new Map();
+      const blindIndex = new Map();
+      for (const doc of indexedDocuments.slice(0, documentCount)) {
+        for (let i = 0; i < doc.terms.length; i++) {
+          const add = (map, key) => {
+            if (!map.has(key)) map.set(key, []);
+            map.get(key).push(doc.id);
+          };
+          add(plaintext, doc.terms[i]);
+          add(blindIndex, doc.tokens[i]);
+        }
+      }
+
+      const terms = [...plaintext.keys()];
+      const queries = Array.from({ length: 400 }, (_, i) => terms[(i * 17 + 5) % terms.length]);
+      const blindQueries = await tokensFor(queries);
+      const measure = (strategy, index, searchTerms, bytesPerPair) => {
+        const lookup = (term) => index.get(term)?.length || 0;
+        let checksum = 0;
+        for (let i = 0; i < 100; i++) checksum += lookup(searchTerms[i % searchTerms.length]);
+        const started = performance.now();
+        for (const term of searchTerms) checksum += lookup(term);
+        const elapsed = Math.max(0.001, performance.now() - started);
+        const averageLookupMicros = Math.round(elapsed * 1000 / searchTerms.length * 100) / 100;
+        const indexedPairs = [...index.values()].reduce((total, ids) => total + ids.length, 0);
+        if (checksum === Number.MIN_SAFE_INTEGER) throw new Error('Unreachable benchmark checksum.');
+        return {
+          strategy,
+          totalLookupMillis: Math.round(elapsed),
+          averageLookupMicros,
+          lookupsPerSecond: Math.round(searchTerms.length * 1000 / elapsed),
+          estimatedIndexBytes: indexedPairs * bytesPerPair
+        };
+      };
+      const plainResult = measure('Plain keyword Map', plaintext, queries, 24);
+      const blindResult = measure('HMAC blind-index Map', blindIndex, blindQueries, 44);
+      const storageOverheadPercent = plainResult.estimatedIndexBytes === 0 ? 0
+        : Math.round((blindResult.estimatedIndexBytes - plainResult.estimatedIndexBytes) * 10000
+          / plainResult.estimatedIndexBytes) / 100;
+      scales.push({
+        documentCount,
+        plaintext: plainResult,
+        blindIndex: blindResult,
+        storageOverheadPercent
+      });
+    }
+    return { documentCount: documents.length, scales };
+  }
+
   $('benchmark-button').addEventListener('click', async (event) => {
     const button = event.currentTarget; const status = $('benchmark-status'); const target = $('benchmark-results');
-    button.disabled = true; button.textContent = 'Running…'; status.textContent = 'Building synthetic indexes and timing lookups…';
+    button.disabled = true; button.textContent = 'Running…'; status.textContent = 'Running synthetic lookups and preparing experimental PDF indexes…';
     try {
       const report = await api('/api/benchmarks/run', { method: 'POST', body: '{}' });
-      status.textContent = `${report.benchmark} · ${report.searchesPerScale} searches per dataset`;
+      let experimental = { documentCount: 0, scales: [] };
+      let experimentalMessage;
+      if (!isUnlocked) {
+        experimentalMessage = 'Unlock the workspace to run experimental benchmarks on uploaded PDFs.';
+      } else {
+        try {
+          const documents = await api(`${API}/documents`);
+          experimental = await runExperimentalBenchmarks(documents);
+          if (experimental.documentCount === 0) {
+            experimentalMessage = 'No uploaded PDFs are available for experimental benchmarks.';
+          } else {
+            const availableScales = experimental.scales.map((scale) => scale.documentCount);
+            const missingScales = [1, 5, 10].filter((count) => !availableScales.includes(count));
+            experimentalMessage = missingScales.length
+              ? `Experimental rows use uploaded PDFs; missing scales: ${missingScales.join(', ')} documents.`
+              : 'Experimental rows use uploaded PDFs.';
+          }
+        } catch (error) {
+          experimentalMessage = `Experimental benchmark unavailable: ${error.message}`;
+        }
+      }
+
+      status.textContent = `${report.benchmark} · ${report.searchesPerScale} searches per dataset · ${experimentalMessage}`;
       const table = document.createElement('table'); table.className = 'benchmark-table';
-      table.innerHTML = '<thead><tr><th>DOCUMENTS</th><th>PLAIN AVG</th><th>HMAC AVG</th><th>PLAIN INDEX</th><th>HMAC INDEX</th><th>SIZE OVERHEAD</th></tr></thead>';
+      table.innerHTML = '<thead><tr><th>DATASET</th><th>DOCUMENTS</th><th>PLAIN AVG</th><th>HMAC AVG</th><th>PLAIN INDEX</th><th>HMAC INDEX</th><th>SIZE OVERHEAD</th></tr></thead>';
       const body = document.createElement('tbody');
-      for (const scale of report.scales) {
+      const completedExperimentalScales = new Set(experimental.scales.map((scale) => scale.documentCount));
+      const experimentalRows = [
+        ...experimental.scales,
+        ...[1, 5, 10]
+          .filter((documentCount) => !completedExperimentalScales.has(documentCount))
+          .map((documentCount) => ({ documentCount, unavailable: true }))
+      ].sort((a, b) => a.documentCount - b.documentCount);
+      const appendRows = (scales, dataset) => {
+        for (const scale of scales) {
+          const row = document.createElement('tr');
+          const values = scale.unavailable
+            ? [dataset, scale.documentCount.toLocaleString(), `Upload at least ${scale.documentCount} PDFs`, '—', '—', '—', '—']
+            : [dataset, scale.documentCount.toLocaleString(), `${scale.plaintext.averageLookupMicros} μs`, `${scale.blindIndex.averageLookupMicros} μs`, bytesLabel(scale.plaintext.estimatedIndexBytes), bytesLabel(scale.blindIndex.estimatedIndexBytes), `${scale.storageOverheadPercent}%`];
+          for (const value of values) { const cell = document.createElement('td'); cell.textContent = value; cell.className = 'mono'; row.append(cell); }
+          body.append(row);
+        }
+      };
+      appendRows(experimentalRows, 'Experimental');
+      appendRows(report.scales, 'Synthetic');
+      if (!body.children.length) {
         const row = document.createElement('tr');
-        const values = [scale.documentCount.toLocaleString(), `${scale.plaintext.averageLookupMicros} μs`, `${scale.blindIndex.averageLookupMicros} μs`, bytesLabel(scale.plaintext.estimatedIndexBytes), bytesLabel(scale.blindIndex.estimatedIndexBytes), `${scale.storageOverheadPercent}%`];
-        for (const value of values) { const cell = document.createElement('td'); cell.textContent = value; cell.className = 'mono'; row.append(cell); }
-        body.append(row);
+        const cell = document.createElement('td'); cell.colSpan = 7; cell.textContent = 'No benchmark results are available.';
+        row.append(cell); body.append(row);
       }
       table.append(body); target.replaceChildren(table);
     } catch (error) { status.textContent = error.message; }

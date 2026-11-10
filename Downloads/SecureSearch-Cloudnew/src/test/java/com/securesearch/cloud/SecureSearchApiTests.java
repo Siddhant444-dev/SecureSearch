@@ -82,12 +82,13 @@ class SecureSearchApiTests {
     }
 
     @Test
-    void benchmarkReturnsThreeScalesAndStatesItsScope() throws Exception {
+    void benchmarkReturnsRequestedSyntheticScalesAndStatesItsScope() throws Exception {
         mvc.perform(post("/api/benchmarks/run").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scales.length()").value(3))
-                .andExpect(jsonPath("$.scales[0].documentCount").value(1000))
-                .andExpect(jsonPath("$.scales[2].documentCount").value(50000))
+                .andExpect(jsonPath("$.scales[0].documentCount").value(100))
+                .andExpect(jsonPath("$.scales[1].documentCount").value(1000))
+                .andExpect(jsonPath("$.scales[2].documentCount").value(10000))
                 .andExpect(jsonPath("$.note").value(org.hamcrest.Matchers.containsString("excludes network")));
     }
 
